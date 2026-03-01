@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FYP BOT — Equity Curve</title>
+<! -- Chart.js for rendering equity chart -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+    /* Monospace + sans-serif */
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    /* colours */
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --border: #1e1e2e;
+    --green: #00ff88;
+    --red: #ff3366;
+    --blue: #4488ff;
+    --yellow: #ffcc00;
+    --text: #e0e0f0;
+    --muted: #555570;
+    --card: #13131e;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'IBM Plex Sans', sans-serif;
+    min-height: 100vh;
+    padding: 32px 24px;
+  }
+  /* Top bar (Title and file upload) */ 
+  header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+
+  .title-block h1 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--green);
+    letter-spacing: -0.5px;
+  }
+  /*Shows  file name and trades taken */
+  .title-block p {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 4px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .upload-area {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  /* button for file input */
+  .upload-btn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 10px 18px;
+    background: transparent;
+    border: 1px solid var(--green);
+    color: var(--green);
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.5px;
+  }
+
+  .upload-btn:hover {
+    background: var(--green);
+    color: var(--bg);
+  }
+
+  #fileInput { display: none; }
+
+  .file-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* Stats */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .stat-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 16px 18px;
+    position: relative;
+    overflow: hidden;
+  }
+  /* Coloured left accent bar */
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 3px;
+    height: 100%;
+    background: var(--green);
+  }
+
+  .stat-card.negative::before { background: var(--red); }
+  .stat-card.neutral::before  { background: var(--blue); }
+  .stat-card.warn::before     { background: var(--yellow); }
+
+  .stat-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .stat-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .stat-value.green { color: var(--green); }
+  .stat-value.red   { color: var(--red); }
+
+  /* Small line below the main value */
+  .stat-sub {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* Equity Chart */
+  .chart-container {
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 24px;
+    margin-bottom: 24px;
+    position: relative;
+  }
+
+  .chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .chart-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  /* USD / Percentages toggle button */
+  .toggle-group {
+    display: flex;
+    gap: 8px;
+  }
+
+  .toggle-btn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .toggle-btn.active {
+    border-color: var(--green);
+    color: var(--green);
+    background: rgba(0,255,136,0.05);
+  }
+
+  canvas { width: 100% !important; }
+
+  /* Trade table */
+  .table-container {
+    background: var(--card);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+
+  .table-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  /* Scrollable trade table */
+  .table-wrap {
+    overflow-x: auto;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+  }
+
+  /* Sticky header on trade table */
+  thead th {
+    padding: 10px 16px;
+    text-align: left;
+    color: var(--muted);
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+  }
+
+  tbody tr {
+    border-bottom: 1px solid rgba(30,30,46,0.6);
+    transition: background 0.1s;
+  }
+
+  tbody tr:hover { background: rgba(255,255,255,0.02); }
+
+  tbody td {
+    padding: 9px 16px;
+    color: var(--text);
+  }
+
+  /* Win/loss colouring */
+  .win  { color: var(--green); }
+  .loss { color: var(--red); }
+
+  /* Direction of trade badges */
+  .long-tag  { color: var(--blue); font-size: 10px; }
+  .short-tag { color: var(--yellow); font-size: 10px; }
+
+  /* No csv file uploaded state */
+  .empty-state {
+    text-align: center;
+    padding: 80px 20px;
+    color: var(--muted);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .empty-state .icon { font-size: 40px; margin-bottom: 16px; opacity: 0.3; }
+  .empty-state p { font-size: 13px; }
+
+  /* Tooltip */
+  .chartjs-tooltip {
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 0 !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+  }
+
+  /* Monthly P&L grids */
+  .monthly-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+
+  .month-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 12px 14px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .month-name { font-size: 10px; color: var(--muted); margin-bottom: 6px; }
+  .month-pnl  { font-size: 14px; font-weight: 600; }
+  .month-trades { font-size: 10px; color: var(--muted); margin-top: 3px; }
+
+  /*Section divider between chart and monthly P&L */
+  .section-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    margin-top: 24px;
+  }
+
+  /*Scrollbars to match the theme of the program */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title-block">
+    <h1>FYP BOT 1 — Equity Analyser</h1>
+    <p id="fileInfo">No file loaded — upload a TradingView CSV to begin</p>
+  </div>
+  <div class="upload-area">
+    <button class="upload-btn" onclick="document.getElementById('fileInput').click()">↑ Load CSV</button>
+    <input type="file" id="fileInput" accept=".csv">
+    <span class="file-label" id="fileName"></span>
+  </div>
+</header>
+
+<!-- Stats -->
+<div class="stats-grid" id="statsGrid">
+  <div class="stat-card neutral">
+    <div class="stat-label">Total Trades</div>
+    <div class="stat-value" id="statTrades">—</div>
+  </div>
+  <div class="stat-card" id="cardPnl">
+    <div class="stat-label">Net P&amp;L</div>
+    <div class="stat-value" id="statPnl">—</div>
+    <div class="stat-sub" id="statPnlPct"></div>
+  </div>
+  <div class="stat-card neutral">
+    <div class="stat-label">Win Rate</div>
+    <div class="stat-value" id="statWR">—</div>
+    <div class="stat-sub" id="statWRFrac"></div>
+  </div>
+  <div class="stat-card neutral">
+    <div class="stat-label">Profit Factor</div>
+    <div class="stat-value" id="statPF">—</div>
+  </div>
+  <div class="stat-card warn">
+    <div class="stat-label">Max Drawdown</div>
+    <div class="stat-value" id="statDD">—</div>
+  </div>
+  <div class="stat-card neutral">
+    <div class="stat-label">Avg Win</div>
+    <div class="stat-value" id="statAvgW">—</div>
+  </div>
+  <div class="stat-card neutral">
+    <div class="stat-label">Avg Loss</div>
+    <div class="stat-value" id="statAvgL">—</div>
+  </div>
+  <div class="stat-card neutral">
+    <div class="stat-label">Expectancy</div>
+    <div class="stat-value" id="statExp">—</div>
+    <div class="stat-sub">per trade</div>
+  </div>
+</div>
+
+<!-- Equity Chart -->
+<div class="chart-container">
+  <div class="chart-header">
+    <span class="chart-title">Cumulative P&amp;L</span>
+    <div class="toggle-group">
+      <button class="toggle-btn active" onclick="setView('pnl', this)">USD</button>
+      <button class="toggle-btn" onclick="setView('pct', this)">%</button>
+    </div>
+  </div>
+  <div style="position:relative; height:340px;">
+    <canvas id="equityChart"></canvas>
+  </div>
+  <div id="emptyState" class="empty-state">
+    <div class="icon">📈</div>
+    <p>Upload a TradingView strategy CSV to render your equity curve</p>
+  </div>
+</div>
+
+<!-- Monthly Breakdown -->
+<div id="monthlySection" style="display:none">
+  <div class="section-label">Monthly P&amp;L Breakdown</div>
+  <div class="monthly-grid" id="monthlyGrid"></div>
+</div>
+
+<!-- Trade Log -->
+<div class="table-container" id="tableContainer" style="display:none">
+  <div class="table-header">
+    <span class="table-title">Trade Log</span>
+    <span class="file-label" id="tableCount"></span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Date</th>
+          <th>Direction</th>
+          <th>Entry</th>
+          <th>Exit</th>
+          <th>P&amp;L (USD)</th>
+          <th>Cumulative</th>
+          <th>Result</th>
+        </tr>
+      </thead>
+      <tbody id="tradeBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+let chart = null;
+let allTrades = [];
+let currentView = 'pnl';
+
+document.getElementById('fileInput').addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  document.getElementById('fileName').textContent = file.name;
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    parseAndRender(ev.target.result, file.name);
+  };
+  reader.readAsText(file);
+});
+
+function parseAndRender(csvText, filename) {
+  // Remove BOM
+  csvText = csvText.replace(/^\uFEFF/, '');
+  const lines = csvText.trim().split('\n');
+  const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+
+  const idx = {
+    tradeNum: headers.indexOf('Trade #'),
+    type: headers.indexOf('Type'),
+    date: headers.indexOf('Date and time'),
+    signal: headers.indexOf('Signal'),
+    price: headers.indexOf('Price USD'),
+    pnl: headers.indexOf('Net P&L USD'),
+    pnlPct: headers.indexOf('Net P&L %'),
+    cumPnl: headers.indexOf('Cumulative P&L USD'),
+    cumPnlPct: headers.indexOf('Cumulative P&L %'),
+    favEx: headers.indexOf('Favorable excursion USD'),
+    advEx: headers.indexOf('Adverse excursion USD'),
+  };
+
+  // Group by trade number
+  const tradeMap = {};
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',').map(c => c.trim().replace(/"/g, ''));
+    if (cols.length < 5) continue;
+    const num = parseInt(cols[idx.tradeNum]);
+    if (isNaN(num)) continue;
+    if (!tradeMap[num]) tradeMap[num] = {};
+    const type = cols[idx.type].toLowerCase();
+    if (type.includes('entry')) {
+      tradeMap[num].entryDate = cols[idx.date];
+      tradeMap[num].entryPrice = parseFloat(cols[idx.price]);
+      tradeMap[num].direction = cols[idx.signal].toLowerCase().includes('short') ? 'Short' : 'Long';
+    } else if (type.includes('exit')) {
+      tradeMap[num].exitDate = cols[idx.date];
+      tradeMap[num].exitPrice = parseFloat(cols[idx.price]);
+      tradeMap[num].pnl = parseFloat(cols[idx.pnl]);
+      tradeMap[num].pnlPct = parseFloat(cols[idx.pnlPct]);
+      tradeMap[num].cumPnl = parseFloat(cols[idx.cumPnl]);
+      tradeMap[num].cumPnlPct = parseFloat(cols[idx.cumPnlPct]);
+    }
+  }
+
+  // Build and clean trade list
+  allTrades = Object.entries(tradeMap)
+    .map(([num, t]) => ({ num: parseInt(num), ...t }))
+    .filter(t => t.exitDate && !isNaN(t.pnl))
+    .sort((a, b) => a.num - b.num);
+
+    // Stop if no valid trades found
+  if (allTrades.length === 0) {
+    alert('Could not parse trades from this CSV. Check the format.');
+    return;
+  }
+
+  //Show file name and trade count
+  document.getElementById('fileInfo').textContent = filename + ' — ' + allTrades.length + ' trades loaded';
+  document.getElementById('emptyState').style.display = 'none';
+
+  //Render dashboard
+  computeStats();
+  renderChart();
+  renderMonthly();
+  renderTable();
+}
+
+function computeStats() {
+  const trades = allTrades;
+  const wins = trades.filter(t => t.pnl > 0);
+  const losses = trades.filter(t => t.pnl <= 0);
+  const totalPnl = trades[trades.length - 1]?.cumPnl ?? 0;
+  const totalPnlPct = trades[trades.length - 1]?.cumPnlPct ?? 0;
+  const wr = wins.length / trades.length;
+  const avgWin = wins.length ? wins.reduce((s,t) => s + t.pnl, 0) / wins.length : 0;
+  const avgLoss = losses.length ? losses.reduce((s,t) => s + t.pnl, 0) / losses.length : 0;
+  const grossWin = wins.reduce((s,t) => s + t.pnl, 0);
+  const grossLoss = Math.abs(losses.reduce((s,t) => s + t.pnl, 0));
+  const pf = grossLoss > 0 ? grossWin / grossLoss : Infinity;
+  const expectancy = wr * avgWin + (1 - wr) * avgLoss;
+
+  // Maximum drawdown
+  let peak = 0, maxDD = 0;
+  for (const t of trades) {
+    if (t.cumPnl > peak) peak = t.cumPnl;
+    const dd = peak - t.cumPnl;
+    if (dd > maxDD) maxDD = dd;
+  }
+
+  // Format as a currenncy
+  const fmt = (v, prefix='$') => {
+    const abs = Math.abs(v);
+    const str = abs >= 1000 ? prefix + (abs/1000).toFixed(1) + 'k' : prefix + abs.toFixed(0);
+    return v < 0 ? '-' + str : str;
+  };
+
+  // Update stats
+  setText('statTrades', trades.length);
+  setText('statPnl', fmt(totalPnl));
+  setText('statPnlPct', (totalPnlPct > 0 ? '+' : '') + totalPnlPct.toFixed(2) + '%');
+  document.getElementById('statPnl').className = 'stat-value ' + (totalPnl >= 0 ? 'green' : 'red');
+  document.getElementById('cardPnl').className = 'stat-card ' + (totalPnl >= 0 ? '' : 'negative');
+
+  setText('statWR', (wr * 100).toFixed(1) + '%');
+  setText('statWRFrac', wins.length + 'W / ' + losses.length + 'L');
+  setText('statPF', isFinite(pf) ? pf.toFixed(3) : '∞');
+  setText('statDD', fmt(maxDD));
+  setText('statAvgW', fmt(avgWin));
+  setText('statAvgL', fmt(avgLoss));
+  setText('statExp', fmt(expectancy));
+}
+
+// Set the text content of an element by its ID
+function setText(id, val) {
+  document.getElementById(id).textContent = val;
+}
+
+function renderChart() {
+  const trades = allTrades;
+  const labels = trades.map(t => t.exitDate ? t.exitDate.split(' ')[0] : '');
+  const pnlData = trades.map(t => t.cumPnl);
+  const pctData = trades.map(t => t.cumPnlPct);
+
+  const data = currentView === 'pnl' ? pnlData : pctData;
+  const yLabel = currentView === 'pnl' ? 'USD' : '%';
+
+  // Color each point
+  const pointColors = trades.map(t => t.pnl > 0 ? '#00ff88' : '#ff3366');
+
+  // Colours
+  const ctx = document.getElementById('equityChart').getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, 0, 340);
+  grad.addColorStop(0, 'rgba(0,255,136,0.15)');
+  grad.addColorStop(1, 'rgba(0,255,136,0)');
+
+  // Destory existing chart before redrawing new one 
+  if (chart) chart.destroy();
+
+  // Build the equity chart
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Equity',
+        data,
+        borderColor: '#00ff88',
+        borderWidth: 2,
+        backgroundColor: grad,
+        fill: true,
+        pointBackgroundColor: pointColors,
+        pointBorderColor: pointColors,
+        pointRadius: 4,
+        pointHoverRadius: 7,
+        tension: 0.1,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#13131e',
+          borderColor: '#1e1e2e',
+          borderWidth: 1,
+          titleColor: '#555570',
+          bodyColor: '#e0e0f0',
+          titleFont: { family: 'IBM Plex Mono', size: 11 },
+          bodyFont: { family: 'IBM Plex Mono', size: 12 },
+          callbacks: {
+            //Tooltip header: number of trade and exit date
+            title: (items) => {
+              const t = allTrades[items[0].dataIndex];
+              return '#' + t.num + ' · ' + t.exitDate;
+            },
+            // Tooltip body: P&L, trade PNL and direction
+            label: (item) => {
+              const t = allTrades[item.dataIndex];
+              const sign = t.pnl >= 0 ? '+' : '';
+              return [
+                ' Cumulative: ' + (currentView === 'pnl' ? '$' + item.raw.toFixed(0) : item.raw.toFixed(2) + '%'),
+                ' This trade: ' + sign + '$' + t.pnl.toFixed(0),
+                ' Direction: ' + (t.direction || '—'),
+              ];
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(30,30,46,0.8)' },
+          ticks: {
+            color: '#555570',
+            font: { family: 'IBM Plex Mono', size: 10 },
+            maxTicksLimit: 12,
+            maxRotation: 0,
+          }
+        },
+        y: {
+          grid: { color: 'rgba(30,30,46,0.8)' },
+          ticks: {
+            color: '#555570',
+            font: { family: 'IBM Plex Mono', size: 10 },
+            // Format y-axis as $ or % depending on toggled view
+            callback: v => currentView === 'pnl' ? '$' + v.toLocaleString() : v.toFixed(1) + '%'
+          }
+        }
+      }
+    }
+  });
+}
+// Switch between $ and % view 
+function setView(view, btn) {
+  currentView = view;
+  document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderChart();
+}
+
+function renderMonthly() {
+  // Group trades by month
+  const monthMap = {};
+  for (const t of allTrades) {
+    if (!t.exitDate) continue;
+    const key = t.exitDate.substring(0, 7); // Year - Month
+    if (!monthMap[key]) monthMap[key] = { pnl: 0, trades: 0, wins: 0 };
+    monthMap[key].pnl += t.pnl;
+    monthMap[key].trades++;
+    if (t.pnl > 0) monthMap[key].wins++;
+  }
+
+  // Sort months and clear the grid
+  const months = Object.keys(monthMap).sort();
+  const grid = document.getElementById('monthlyGrid');
+  grid.innerHTML = '';
+
+  // Create a box for each month
+  for (const m of months) {
+    const d = monthMap[m];
+    const [y, mo] = m.split('-');
+    const label = new Date(y, mo - 1).toLocaleString('default', { month: 'short', year: '2-digit' });
+    const card = document.createElement('div');
+    card.className = 'month-card';
+    const color = d.pnl >= 0 ? '#00ff88' : '#ff3366'; // green = profit, red = loss
+    const sign = d.pnl >= 0 ? '+' : '';
+    card.innerHTML = `
+      <div class="month-name">${label}</div>
+      <div class="month-pnl" style="color:${color}">${sign}$${d.pnl.toLocaleString('en', {maximumFractionDigits:0})}</div>
+      <div class="month-trades">${d.trades} trades · ${Math.round(d.wins/d.trades*100)}% WR</div>
+    `;
+    grid.appendChild(card);
+  }
+
+  // Show monthly section
+  document.getElementById('monthlySection').style.display = 'block';
+}
+
+function renderTable() {
+  const tbody = document.getElementById('tradeBody');
+  tbody.innerHTML = '';
+
+  // Add row for every trade 
+  for (const t of allTrades) {
+    const win = t.pnl > 0;
+    const sign = t.pnl >= 0 ? '+' : '';
+    const cumSign = t.cumPnl >= 0 ? '' : '';
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${t.num}</td>
+      <td>${t.exitDate || '—'}</td>
+      <td><span class="${t.direction === 'Long' ? 'long-tag' : 'short-tag'}">${t.direction || '—'}</span></td>
+      <td>${t.entryPrice?.toFixed(2) ?? '—'}</td>
+      <td>${t.exitPrice?.toFixed(2) ?? '—'}</td>
+      <td class="${win ? 'win' : 'loss'}">${sign}$${t.pnl?.toFixed(0)}</td>
+      <td style="color:${t.cumPnl >= 0 ? '#00ff88' : '#ff3366'}">$${t.cumPnl?.toFixed(0)}</td>
+      <td class="${win ? 'win' : 'loss'}">${win ? 'WIN' : 'LOSS'}</td>
+    `;
+    tbody.appendChild(row);
+  }
+
+  // Show table and update trade count
+  document.getElementById('tableContainer').style.display = 'block';
+  document.getElementById('tableCount').textContent = allTrades.length + ' trades';
+}
+</script>
+</body>
+</html>
