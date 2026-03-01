@@ -28,7 +28,7 @@ An automated trading strategy built in PineScript v6 on TradingView, targeting t
 ├── backtests/
 │   ├── NQ1_optimised.csv   # Trade log — NQ1! Jan 2025–Feb 2026 (optimised)
 │   ├── NQ1_OOS_2023.csv    # Trade log — NQ1! Jan 2023–Dec 2024 (out-of-sample)
-│   └── screenshots/        # TradingView equity curve screenshots
+│   └── NQ1_optimised.png       # TradingView equity curve screenshot
 └── README.md
 ```
 
