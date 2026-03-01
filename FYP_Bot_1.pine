@@ -1,0 +1,577 @@
+//@version=6
+strategy("FYP BOT 1", overlay = true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Algorithm settings
+maxTradesPerDay = input.int(1, "Max Trades Per Day", minval=1, maxval=9223372036854775807, group="Money Management")
+swingLookback = input.int(8, "Swing Lookback Bars", minval=1, maxval=20, group="Money Management")
+riskRewardRatio = input.float(1.5, "Risk/Reward Ratio", minval=0.3, maxval=10.0, step=0.1, group="Money Management")
+useTradingSession = input.bool(true, "Use NY Trading Session Only?", group="Trading Hours")
+startHour = input.int(9, "NY Session Start (Hour)", minval=0, maxval=23, group="Trading Hours")
+startMinute = input.int(32, "Start Minute", minval=0, maxval=59, group="Trading Hours")
+endHour = input.int(10, "NY Session End (Hour)", minval=0, maxval=23, group="Trading Hours")
+endMinute = input.int(0, "End Minute", minval=0, maxval=59, group="Trading Hours")
+
+// Trading session minutes
+currentTimeInMinutes = hour * 60 + minute
+startTimeInMinutes = startHour * 60 + startMinute
+endTimeInMinutes = endHour * 60 + endMinute
+
+// Check if current time is in selected trading window
+inSession = currentTimeInMinutes >= startTimeInMinutes and currentTimeInMinutes < endTimeInMinutes
+isWeekday = dayofweek != dayofweek.sunday and dayofweek != dayofweek.saturday
+
+inTradingSession = useTradingSession ? (inSession and isWeekday) : true
+
+// CISD 
+bullishBreakColor = input.color(color.black, "Bull CISD", inline = "bup")
+bearishBreakColor = input.color(color.black, "Bear CISD", inline = "bep")
+
+bullStr = input.string("+CISD", " ", tooltip = "Text to be displayed next to the CISD level.", inline = "bup")
+bearStr = input.string("-CISD", " ", tooltip = "Text to be displayed next to the CISD level.", inline = "bep")
+
+// CISD settings
+lineWidth = input.int(1, "Line Width", minval=1, maxval=5)
+lookAheadBars = input.int(5, "Line Extension Bars", minval=1, maxval = 5)
+styleOption = input.string("Solid (─)", title="Line Style",
+     options=["Solid (─)", "Dotted (┈)", "Dashed (╌)"])
+keepLevels = input.bool(false, "Keep old CISD levels")
+
+// Settings for table
+showTable = input(false, title="Enable stat table", group = "Table")
+tablePosition = input.string(defval = "Top Right", title = "Table Position", 
+  options=["Top Right", "Bottom Right", "Middle Right", "Bottom Center", "Middle Left"], group = "Table")
+
+
+// Filter 1: Higher time frame allignment filter
+useHTF       = input.bool(false, "Use HTF Trend Filter", group="HTF Trend Filter")
+htfTimeframe = input.timeframe("5", "HTF Timeframe", group="HTF Trend Filter", tooltip="Higher timeframe for trend direction. Try 3, 5, or 15.")
+htfEmaLength = input.int(20, "HTF EMA Length", minval=1, group="HTF Trend Filter")
+
+// Filter 2: Minimum fair value gap size filter
+useMinFVG    = input.bool(false, "Use Minimum FVG Size Filter", group="FVG Size Filter")
+minFVGPoints = input.float(10.0, "Minimum FVG Size (Points)", minval=0.1, step=0.5, group="FVG Size Filter", tooltip="Filters out tiny, insignificant FVGs. Adjust based on instrument.")
+
+// Filter 3: Strong candle filter
+useStrongCandle  = input.bool(false, "Use Strong Candle Filter", group="Strong Candle Filter")
+strongCandleMult = input.float(1.5, "Min Body/ATR Multiplier", minval=0.1, step=0.1, group="Strong Candle Filter", tooltip="CISD confirmation candle body must be >= this multiple of ATR. Higher = stronger candle required.")
+atrLength        = input.int(14, "ATR Length", minval=1, group="Strong Candle Filter")
+
+// Filter 4: Volume filter
+useVolumeFilter  = input.bool(false, "Use Volume Filter", group="Volume Filter")
+volumeMaLength   = input.int(20, "Volume MA Length", minval=1, group="Volume Filter", tooltip="CISD confirmation candle volume must be above this MA. Ensures moves are backed by real participation.")
+volumeMultiplier = input.float(1.0, "Volume Multiplier", minval=0.1, step=0.1, group="Volume Filter", tooltip="Volume must be >= this multiple of the MA. 1.0 = above average, 1.5 = 50% above average.")
+
+// Filter 5: 1 minute liquidity sweep filter
+useSweepFilter = input.bool(true, "Use 1-Min Liquidity Sweep Filter", group="Liquidity Sweep (1-Min)")
+sweepLookback  = input.int(5, "Sweep Lookback Bars", minval=2, maxval=50, group="Liquidity Sweep (1-Min)", tooltip="How many 1-min bars back to look for the swept high/low.")
+sweepExpiry    = input.int(5, "Sweep Expiry Bars", minval=1, maxval=50, group="Liquidity Sweep (1-Min)", tooltip="How many bars the detected sweep remains valid for an entry.")
+
+// Filter 6: hourly candle liquidity sweep filter
+useHourlySweep    = input.bool(false, "Use Hourly Candle Sweep Filter", group="Liquidity Sweep (Hourly)", tooltip="Price must sweep the previous hourly candle high/low and close back inside before entry.")
+hourlySweepExpiry = input.int(10, "Hourly Sweep Expiry Bars", minval=1, maxval=60, group="Liquidity Sweep (Hourly)", tooltip="How many 1-min bars the hourly sweep signal remains valid.")
+
+// Filter 7: Previous day high/low sweep filter
+useDailySweep    = input.bool(false, "Use Previous Day H/L Sweep Filter", group="Liquidity Sweep (Prev Day H/L)", tooltip="Price must sweep the previous day's high or low and close back inside before entry.")
+dailySweepExpiry = input.int(30, "Daily Sweep Expiry Bars", minval=1, maxval=120, group="Liquidity Sweep (Prev Day H/L)", tooltip="How many 1-min bars the daily sweep signal remains valid.")
+
+// Structure Definitions
+type MarketStructure
+    float topPrice
+    float bottomPrice
+    bool isBullish
+
+type cisd
+    line level
+    label txt
+    bool completed
+
+// options for the CISD line 
+lineStyle = styleOption == "Dotted (┈)" ? line.style_dotted :
+     styleOption == "Dashed (╌)" ? line.style_dashed :
+         line.style_solid
+
+// Variable Declarations
+var MarketStructure currentStructure = MarketStructure.new(0, 0, false)
+var cisdLevelsBu = array.new<cisd>()
+var cisdLevelsBe = array.new<cisd>()
+var bool isBullishPullback = false
+var bool isBearishPullback = false
+var float potentialTopPrice = na
+var float potentialBottomPrice = na
+var int bullishBreakIndex = na
+var int bearishBreakIndex = na
+var bool currentState = false
+var int tradesToday = 0
+var string ifvgState = "None"
+
+//options for table position
+gettablePos(pos) =>
+    switch pos
+        "Top Right" => position.top_right
+        "Bottom Right" => position.bottom_right
+        "Middle Right" => position.middle_right
+        "Bottom Center" => position.bottom_center
+        "Middle Left" => position.bottom_left
+
+
+// IFVG Types
+type FVGData
+    float top
+    float bottom
+    bool isBullish
+    int startBar
+    int endBar
+    bool isInverted
+    int invertBar
+    box ifvgBox
+
+//Intial state of the IFVG when algorithm starts 
+var array<FVGData> fvgArray = array.new<FVGData>()
+var int lastInvertedIndex = -1
+
+
+
+// Session reset logic 
+var int lastTradeDay = 0
+currentDay = dayofmonth + month * 100 + year * 10000
+if currentDay != lastTradeDay
+    tradesToday := 0
+    lastTradeDay := currentDay
+    array.clear(fvgArray)
+
+
+
+// Reset IFVG state when entering session each day
+var bool sessionStarted = false
+if inTradingSession and not sessionStarted[1]
+    sessionStarted := true
+    ifvgState := "None"
+else if not inTradingSession
+    sessionStarted := false
+
+
+
+// Higher time frame Estimated Moving Average
+htfEma     = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, htfEmaLength), lookahead=barmerge.lookahead_off)
+htfBullish = close > htfEma
+htfBearish = close < htfEma
+
+// Average True Range for strong candle
+atr = ta.atr(atrLength)
+
+//  Volume of Moving Average
+volumeMa     = ta.sma(volume, volumeMaLength)
+isHighVolume = useVolumeFilter ? volume >= (volumeMa * volumeMultiplier) : true
+
+// Filter 5: 1 minute liquidity sweep
+recentSwingLow  = ta.lowest(low, sweepLookback)
+recentSwingHigh = ta.highest(high, sweepLookback)
+
+bullishSweep1m = low < recentSwingLow[1] and close > recentSwingLow[1]
+bearishSweep1m = high > recentSwingHigh[1] and close < recentSwingHigh[1]
+
+var bool pendingBullSweep1m = false
+var int  bullSweepExpiry1m  = 0
+var bool pendingBearSweep1m = false
+var int  bearSweepExpiry1m  = 0
+
+if bullishSweep1m
+    pendingBullSweep1m := true
+    bullSweepExpiry1m  := bar_index + sweepExpiry
+if bearishSweep1m
+    pendingBearSweep1m := true
+    bearSweepExpiry1m  := bar_index + sweepExpiry
+if bar_index >= bullSweepExpiry1m
+    pendingBullSweep1m := false
+if bar_index >= bearSweepExpiry1m
+    pendingBearSweep1m := false
+
+//Seeing if short or long is ok if swept
+sweep1mLongOk  = useSweepFilter ? pendingBullSweep1m : true
+sweep1mShortOk = useSweepFilter ? pendingBearSweep1m : true
+
+// Filter 6: Hourly liquidity sweep using previous hour's high/low via HTF request
+prevHourHigh = request.security(syminfo.tickerid, "60", high[1], lookahead=barmerge.lookahead_off)
+prevHourLow  = request.security(syminfo.tickerid, "60", low[1],  lookahead=barmerge.lookahead_off)
+
+bullishHourlySweep = low < prevHourLow and close > prevHourLow
+bearishHourlySweep = high > prevHourHigh and close < prevHourHigh
+
+var bool pendingBullHourlySweep = false
+var int  bullHourlyExpiry       = 0
+var bool pendingBearHourlySweep = false
+var int  bearHourlyExpiry       = 0
+
+if bullishHourlySweep
+    pendingBullHourlySweep := true
+    bullHourlyExpiry       := bar_index + hourlySweepExpiry
+if bearishHourlySweep
+    pendingBearHourlySweep := true
+    bearHourlyExpiry       := bar_index + hourlySweepExpiry
+if bar_index >= bullHourlyExpiry
+    pendingBullHourlySweep := false
+if bar_index >= bearHourlyExpiry
+    pendingBearHourlySweep := false
+
+hourlySwpLongOk  = useHourlySweep ? pendingBullHourlySweep : true
+hourlySwpShortOk = useHourlySweep ? pendingBearHourlySweep : true
+
+
+
+// Filter 7: Previous days high/low sweep 
+prevDayHigh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_off)
+prevDayLow  = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_off)
+
+bullishDailySweep = low < prevDayLow and close > prevDayLow
+bearishDailySweep = high > prevDayHigh and close < prevDayHigh
+
+var bool pendingBullDailySweep = false
+var int  bullDailyExpiry       = 0
+var bool pendingBearDailySweep = false
+var int  bearDailyExpiry       = 0
+
+if bullishDailySweep
+    pendingBullDailySweep := true
+    bullDailyExpiry       := bar_index + dailySweepExpiry
+if bearishDailySweep
+    pendingBearDailySweep := true
+    bearDailyExpiry       := bar_index + dailySweepExpiry
+if bar_index >= bullDailyExpiry
+    pendingBullDailySweep := false
+if bar_index >= bearDailyExpiry
+    pendingBearDailySweep := false
+
+dailySwpLongOk  = useDailySweep ? pendingBullDailySweep : true
+dailySwpShortOk = useDailySweep ? pendingBearDailySweep : true
+
+
+// Pullback Detection
+bearishPullbackDetected = close[1] > open[1]
+bullishPullbackDetected = close[1] < open[1]
+
+
+if bearishPullbackDetected and not isBearishPullback
+    isBearishPullback := true
+    potentialTopPrice := open[1]
+    bullishBreakIndex := bar_index[1]
+
+if bullishPullbackDetected and not isBullishPullback
+    isBullishPullback := true
+    potentialBottomPrice := open[1]
+    bearishBreakIndex := bar_index[1]
+
+// Update Potential Levels
+if isBullishPullback
+    if open < potentialBottomPrice
+        potentialBottomPrice := open
+        bearishBreakIndex := bar_index
+    if (close < open) and (open > potentialBottomPrice)
+        potentialBottomPrice := open
+        bearishBreakIndex := bar_index     
+
+if isBearishPullback
+    if open > potentialTopPrice
+        potentialTopPrice := open
+        bullishBreakIndex := bar_index
+    if (close > open) and open < potentialTopPrice
+        potentialTopPrice := open
+        bullishBreakIndex := bar_index      
+
+
+// Structure Updates - Bearish Break
+if low < currentStructure.bottomPrice
+    currentStructure.bottomPrice := low
+    currentStructure.isBullish := false
+    
+    if isBearishPullback and (bar_index-bullishBreakIndex != 0)
+        currentStructure.topPrice := math.max(high[bar_index-bullishBreakIndex],high[bar_index-bullishBreakIndex+1])
+        isBearishPullback := false
+        bearishLine = line.new(bullishBreakIndex, potentialTopPrice, bar_index + lookAheadBars, potentialTopPrice, color=bullishBreakColor, width=lineWidth, style = lineStyle)
+        bearishLabel = label.new(bar_index + lookAheadBars, potentialTopPrice, bullStr, color=color.new(color.white,100), textcolor=bullishBreakColor, style=label.style_label_left, text_font_family = font.family_default, size = size.small, text_formatting = text.format_italic)
+        b = cisd.new(bearishLine, bearishLabel, false)
+        cisdLevelsBe.push(b)
+    else if close[1] > open[1] and close < open
+        currentStructure.topPrice := high[1]
+        isBearishPullback := false
+        bearishLine = line.new(bullishBreakIndex, potentialTopPrice, bar_index + lookAheadBars, potentialTopPrice, color=bullishBreakColor, width=lineWidth, style = lineStyle)
+        bearishLabel = label.new(bar_index + lookAheadBars, potentialTopPrice, bullStr, color=color.new(color.white,100), textcolor=bullishBreakColor, style=label.style_label_left, text_font_family = font.family_default, size = size.small, text_formatting = text.format_italic)
+        b = cisd.new(bearishLine, bearishLabel, false)
+        cisdLevelsBe.push(b)
+
+// Structure Updates - Bullish Break
+if high > currentStructure.topPrice
+    currentStructure.isBullish := true
+    currentStructure.topPrice := high
+    
+    if isBullishPullback and (bar_index-bearishBreakIndex != 0)
+        currentStructure.bottomPrice := math.min(low[bar_index-bearishBreakIndex],low[bar_index-bearishBreakIndex+1])
+        isBullishPullback := false
+        bullishLine = line.new(bearishBreakIndex, potentialBottomPrice, bar_index + lookAheadBars, potentialBottomPrice, color=bearishBreakColor, width=lineWidth, style = lineStyle)
+        bullishLabel = label.new(bar_index + lookAheadBars, potentialBottomPrice, bearStr, color=color.new(color.white,100), textcolor=bearishBreakColor, style=label.style_label_left, text_font_family = font.family_default, size = size.small, text_formatting = text.format_italic)
+        bu = cisd.new(bullishLine, bullishLabel, false)
+        cisdLevelsBu.push(bu)
+    else if close[1] < open[1] and close > open
+        currentStructure.bottomPrice := low[1]
+        isBullishPullback := false
+        bullishLine = line.new(bearishBreakIndex, potentialBottomPrice, bar_index + lookAheadBars, potentialBottomPrice, color=bearishBreakColor, width=lineWidth, style = lineStyle)
+        bullishLabel = label.new(bar_index + lookAheadBars, potentialBottomPrice, bearStr, color=color.new(color.white,100), textcolor=bearishBreakColor, style=label.style_label_left, text_font_family = font.family_default, size = size.small, text_formatting = text.format_italic)
+        bu = cisd.new(bullishLine, bullishLabel, false)
+        cisdLevelsBu.push(bu)
+
+if array.size(cisdLevelsBu) > 1 and not keepLevels
+    latest = array.shift(cisdLevelsBu)
+    line.delete(latest.level)
+    label.delete(latest.txt)
+
+if array.size(cisdLevelsBe) > 1 and not keepLevels
+    latest = array.shift(cisdLevelsBe)
+    line.delete(latest.level)
+    label.delete(latest.txt)
+
+if array.size(cisdLevelsBu) >= 1
+    latest = array.get(cisdLevelsBu,0)
+    if not (close < latest.level.get_y2()) and not latest.completed
+        line.set_x2(latest.level, bar_index+lookAheadBars)
+        label.set_x(latest.txt, bar_index+lookAheadBars)
+    if close < latest.level.get_y2() and not latest.completed and close[1] > latest.level.get_y2()
+        latest.completed := true
+
+if array.size(cisdLevelsBe) >= 1 and not keepLevels
+    latest = array.get(cisdLevelsBe,0)
+    if not (close > latest.level.get_y2()) and not latest.completed
+        line.set_x2(latest.level, bar_index+lookAheadBars)
+        label.set_x(latest.txt, bar_index+lookAheadBars)
+    if close > latest.level.get_y2() and not latest.completed and close[1] < latest.level.get_y2()
+        latest.completed := true
+
+// CISD state logic
+var float bullCisdLevel = na
+var float bearCisdLevel = na
+
+if array.size(cisdLevelsBu) > 0
+    bullCisdLevel := array.get(cisdLevelsBu, 0).level.get_y2()
+if array.size(cisdLevelsBe) > 0
+    bearCisdLevel := array.get(cisdLevelsBe, 0).level.get_y2()
+
+bullCross = not na(bearCisdLevel) and close > bearCisdLevel and close[1] <= bearCisdLevel
+bearCross = not na(bullCisdLevel) and close < bullCisdLevel and close[1] >= bullCisdLevel
+
+if bullCross
+    currentState := true
+else if bearCross
+    currentState := false
+
+// IFVG logic
+fvgThreshold = input.float(0, "FVG Threshold %", minval=0, step=0.1)
+endMethod = input.string("Close", "Invalidation Method", options=["Wick", "Close"])
+
+bullIFVGColor = input.color(color.new(color.blue, 70), "Bullish IFVG")
+bearIFVGColor = input.color(color.new(color.orange, 70), "Bearish IFVG")
+
+showLastIFVG = 1
+
+bullishGap = low > high[2]
+bullGapSize = bullishGap ? low - high[2] : 0.0
+bullThreshold = bullishGap ? (bullGapSize / high[2]) * 100 >= fvgThreshold : false
+
+bearishGap = high < low[2]
+bearGapSize = bearishGap ? low[2] - high : 0.0
+bearThreshold = bearishGap ? (bearGapSize / low[2]) * 100 >= fvgThreshold : false
+
+// Minimum fair value gap Check
+bullSizeValid = useMinFVG ? (bullishGap ? bullGapSize >= minFVGPoints : false) : true
+bearSizeValid = useMinFVG ? (bearishGap ? bearGapSize >= minFVGPoints : false) : true
+
+// Session restricted IFVG creatation
+if bullThreshold and bullSizeValid and inTradingSession
+    fvg = FVGData.new(
+         top = low,
+         bottom = high[2],
+         isBullish = true,
+         startBar = bar_index,
+         endBar = na,
+         isInverted = false,
+         invertBar = na,
+         ifvgBox = na
+     )
+    array.unshift(fvgArray, fvg)
+
+if bearThreshold and bearSizeValid and inTradingSession
+    fvg = FVGData.new(
+         top = low[2],
+         bottom = high,
+         isBullish = false,
+         startBar = bar_index,
+         endBar = na,
+         isInverted = false,
+         invertBar = na,
+         ifvgBox = na
+     )
+    array.unshift(fvgArray, fvg)
+
+if array.size(fvgArray) > 0
+    for i = 0 to array.size(fvgArray) - 1
+        fvg = array.get(fvgArray, i)
+        
+        if not fvg.isInverted
+            if fvg.isBullish
+                breached = endMethod == "Wick" ? low < fvg.bottom : close < fvg.bottom
+                if breached
+                    fvg.isInverted := true
+                    fvg.invertBar := bar_index
+                    fvg.endBar := bar_index
+                    lastInvertedIndex := i
+            
+            else
+                breached = endMethod == "Wick" ? high > fvg.top : close > fvg.top
+                if breached
+                    fvg.isInverted := true
+                    fvg.invertBar := bar_index
+                    fvg.endBar := bar_index
+                    lastInvertedIndex := i
+
+if array.size(fvgArray) > 0
+    bullIFVGCount = 0
+    bearIFVGCount = 0
+    
+    for i = 0 to array.size(fvgArray) - 1
+        fvg = array.get(fvgArray, i)
+        
+        box.delete(fvg.ifvgBox)
+        
+        if fvg.isInverted
+            if not fvg.isBullish and bullIFVGCount < showLastIFVG
+                fvg.ifvgBox := box.new(
+                     left = fvg.startBar,
+                     top = fvg.top,
+                     right = bar_index + 10,
+                     bottom = fvg.bottom,
+                     border_color = color.new(color.blue, 50),
+                     bgcolor = bullIFVGColor,
+                     text = "IFVG",
+                     text_color = color.blue,
+                     text_size = size.small,
+                     border_style = line.style_dashed
+                 )
+                bullIFVGCount += 1
+            
+            else if fvg.isBullish and bearIFVGCount < showLastIFVG
+                fvg.ifvgBox := box.new(
+                     left = fvg.startBar,
+                     top = fvg.top,
+                     right = bar_index + 10,
+                     bottom = fvg.bottom,
+                     border_color = color.new(color.orange, 50),
+                     bgcolor = bearIFVGColor,
+                     text = "IFVG",
+                     text_color = color.orange,
+                     text_size = size.small,
+                     border_style = line.style_dashed
+                 )
+                bearIFVGCount += 1
+
+// IFVG state Update 
+if array.size(fvgArray) > 0
+    for i = 0 to array.size(fvgArray) - 1
+        fvg = array.get(fvgArray, i)
+        if fvg.isInverted
+            ifvgState := fvg.isBullish ? "Bearish" : "Bullish"
+            break
+
+if not inTradingSession
+    ifvgState := "None"
+
+// IFVG + CISD double confirmation
+var string lastIfvgState = "None"
+var bool lastCisdBullish = false
+
+ifvgTurnedBullish = (lastIfvgState != "Bullish") and (ifvgState == "Bullish")
+cisdTurnedBullish = (lastCisdBullish == false) and (currentState == true)
+ifvgTurnedBearish = (lastIfvgState != "Bearish") and (ifvgState == "Bearish")
+cisdTurnedBearish = (lastCisdBullish == true) and (currentState == false)
+
+bullDouble = ((lastIfvgState == "Bullish") and (ifvgState == "Bullish") and cisdTurnedBullish) or (ifvgTurnedBullish and cisdTurnedBullish)
+bearDouble = ((lastIfvgState == "Bearish") and (ifvgState == "Bearish") and cisdTurnedBearish) or (ifvgTurnedBearish and cisdTurnedBearish)
+
+var line doubleConfirmLine = na
+if bullDouble
+    doubleConfirmLine := line.new(bar_index, close, bar_index+5, close, color=color.green, width=3, style=line.style_solid)
+if bearDouble
+    doubleConfirmLine := line.new(bar_index, close, bar_index+5, close, color=color.red, width=3, style=line.style_solid)
+
+lastIfvgState := ifvgState
+lastCisdBullish := currentState
+
+// Most recent IFVG levels (expire after 10 bars)
+ifvgLookback = 10
+
+var float ifvgTop = na
+var float ifvgBottom = na
+var int ifvgBarIndex = na
+
+if array.size(fvgArray) > 0
+    for i = 0 to array.size(fvgArray) - 1
+        fvg = array.get(fvgArray, i)
+        if fvg.isInverted
+            if bar_index - fvg.invertBar <= ifvgLookback
+                ifvgTop := fvg.top
+                ifvgBottom := fvg.bottom
+                ifvgBarIndex := fvg.invertBar
+            else
+                ifvgTop := na
+                ifvgBottom := na
+                ifvgBarIndex := na
+            break
+
+// swing high/low for stops 
+swingLow = ta.lowest(low, swingLookback)
+swingHigh = ta.highest(high, swingLookback)
+
+// EMA trend filter
+emaLength = input.int(20, "EMA Length", minval=1, group="Trend Filter")
+emaSource = input.source(close, "EMA Source", group="Trend Filter")
+showEma = input.bool(true, "Show EMA on Chart", group="Trend Filter")
+
+ema = ta.ema(emaSource, emaLength)
+plot(showEma ? ema : na, "Trend EMA", color=color.yellow, linewidth=2)
+
+// strong candle Check
+cisdBody       = math.abs(close - open)
+isStrongCandle = useStrongCandle ? cisdBody >= (strongCandleMult * atr) : true
+
+// strategy exuction
+noTradeOpen = strategy.position_size == 0
+canTradeNow = tradesToday < maxTradesPerDay
+
+htfLongOk  = useHTF ? htfBullish : true
+htfShortOk = useHTF ? htfBearish : true
+
+longEntry  = bullDouble and inTradingSession and noTradeOpen and canTradeNow and close > ema and htfLongOk and isStrongCandle and isHighVolume and sweep1mLongOk and hourlySwpLongOk and dailySwpLongOk
+shortEntry = bearDouble and inTradingSession and noTradeOpen and canTradeNow and close < ema and htfShortOk and isStrongCandle and isHighVolume and sweep1mShortOk and hourlySwpShortOk and dailySwpShortOk
+
+if longEntry and not na(ifvgBottom)
+    longStopPrice = swingLow
+    riskAmount = close - longStopPrice
+    longTakeProfit = close + (riskAmount * riskRewardRatio)
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=longStopPrice, limit=longTakeProfit)
+    tradesToday += 1
+
+if shortEntry and not na(ifvgTop)
+    shortStopPrice = swingHigh
+    riskAmount = shortStopPrice - close
+    shortTakeProfit = close - (riskAmount * riskRewardRatio)
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=shortStopPrice, limit=shortTakeProfit)
+    tradesToday += 1
+
+// table
+if showTable and barstate.islast
+    var tbl = table.new(gettablePos(tablePosition), 3, 6, bgcolor=chart.bg_color, border_color=chart.fg_color, frame_color = chart.fg_color, frame_width = 1, border_width = 1)
+    table.cell(tbl, 0, 0, syminfo.ticker+", "+timeframe.period+" Strategy|", text_size = size.tiny, text_color = chart.fg_color, text_font_family = font.family_monospace)
+    table.cell(tbl, 0, 1, "CISD State", text_color=chart.bg_color, text_size=size.small, text_font_family = font.family_monospace, text_formatting = text.format_bold, bgcolor = chart.fg_color)
+    table.cell(tbl, 0, 2, currentState ? "Bullish" : "Bearish", text_color=chart.fg_color, text_size=size.small, text_font_family = font.family_monospace, text_formatting = text.format_bold)
+    table.cell(tbl, 1, 1, "IFVG State", text_color=chart.bg_color, text_size=size.small, text_font_family = font.family_monospace, text_formatting = text.format_bold, bgcolor = chart.fg_color)
+    table.cell(tbl, 1, 2, na(ifvgTop) ? "Expired" : ifvgState, text_color=chart.fg_color, text_size=size.small, text_font_family = font.family_monospace, text_formatting = text.format_bold)
+    table.cell(tbl, 2, 1, "Trades Today", text_color=chart.bg_color, text_size=size.small, text_font_family = font.family_monospace, text_formatting = text.format_bold, bgcolor = chart.fg_color)
+    table.cell(tbl, 2, 2, str.tostring(tradesToday) + "/" + str.tostring(maxTradesPerDay), text_color=chart.fg_color, text_size=size.small, text_font_family = font.family_monospace, text_formatting = text.format_bold)
