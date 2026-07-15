@@ -17,7 +17,7 @@ NQ1!, January 2025 to February 2026.
 | Net P&L | +$28,400 |
 | Profit factor | 1.703 |
 | Max drawdown | 0.95% |
-| Expectancy | +$211 per trade |
+| Expectancy | +$394 per trade |
 
 ## Strategy Logic
 
