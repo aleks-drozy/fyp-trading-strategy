@@ -10,6 +10,8 @@ This repository documents a Pine Script strategy built in TradingView for the NA
 
 NQ1!, January 2025 to February 2026.
 
+![In-sample performance summary for NQ1!, January 2025 to February 2026](backtests/NQ1_optimised.png)
+
 | Metric | Value |
 | --- | --- |
 | Total trades | 72 |
@@ -18,6 +20,8 @@ NQ1!, January 2025 to February 2026.
 | Profit factor | 1.703 |
 | Max drawdown | 0.95% |
 | Expectancy | +$394 per trade |
+
+The trade log behind these figures is committed at `backtests/NQ1_optimised.csv`, and the summary image above is generated from it by `CSV_to_Equity_Graph.html`. Trade count, win rate, profit factor, net P&L and expectancy are all reproducible from that file.
 
 ## Strategy Logic
 
@@ -35,9 +39,16 @@ Change in State of Delivery identifies a structural shift in market direction. T
 - Bullish CISD: price closes above a prior bearish swing high
 - Bearish CISD: price closes below a prior bullish swing low
 
+### Trend Filter
+
+A 20-period EMA gates every entry. The signal bar must close on the correct side of it: above the EMA for longs, below it for shorts. Length and source are inputs, defaulting to 20 periods on the close.
+
 ### Entry Model
 
-A trade is only entered when IFVG and CISD signals align in the same direction. A liquidity sweep filter on the one-minute chart is used as additional confirmation before entry.
+A trade is only entered when IFVG and CISD signals align in the same direction, and both filters agree on the same bar:
+
+- Trend: close above the 20-period EMA for longs, close below it for shorts
+- Liquidity: a sweep detected on the one-minute chart and not yet expired
 
 ### Risk Management
 
@@ -49,10 +60,13 @@ A trade is only entered when IFVG and CISD signals align in the same direction. 
 ## Repository Structure
 
 ```text
-FYP_BOT_1.pine              Main Pine Script strategy
-CSV_to_Equity_Graph.html    Browser-based equity curve visualisation
-backtests/                  Trade logs and result screenshots
-README.md                   Project documentation
+FYP_Bot_1.pine                            Main Pine Script strategy
+CSV_to_Equity_Graph.html                  Browser-based equity curve visualisation
+backtests/NQ1_optimised.csv               In-sample trade log, 2025-26
+backtests/NQ1_optimised.png               In-sample performance summary
+backtests/NQ1_2023_2024                   Out-of-sample trade log, 2023-24
+backtests/NQ1_2023_2024_Equity_Chart.png  Out-of-sample equity curve
+README.md                                 Project documentation
 ```
 
 ## Optimised Parameters
@@ -61,6 +75,7 @@ README.md                   Project documentation
 | --- | --- |
 | Session window | 09:32 to 10:00 NY |
 | Risk/reward ratio | 1.5 |
+| EMA length | 20 |
 | Swing lookback | 8 bars |
 | Sweep lookback | 5 bars |
 | Sweep expiry | 5 bars |
@@ -68,21 +83,26 @@ README.md                   Project documentation
 
 ## Out-of-Sample Results
 
-NQ1!, January 2023 to December 2024.
+NQ1!, 95 trades between 6 March 2023 and 30 December 2024.
 
 The out-of-sample period produced weaker results, which is consistent with the strategy design. The model depends on sharp, impulsive price action; low-volatility and slow-trending periods reduce the edge.
 
+![Out-of-sample equity curve for NQ1!, March 2023 to December 2024](backtests/NQ1_2023_2024_Equity_Chart.png)
+
 | Metric | In-sample 2025-26 | Out-of-sample 2023-24 |
 | --- | --- | --- |
-| Win rate | 56.94% | 36.27% |
-| Profit factor | 1.703 | 0.855 |
-| Net P&L | +$28,400 | -$15,650 |
+| Trades | 72 | 95 |
+| Win rate | 56.94% | 37.89% |
+| Profit factor | 1.703 | 0.898 |
+| Net P&L | +$28,400 | -$4,600 |
+
+The out-of-sample log is committed at `backtests/NQ1_2023_2024` (a TradingView CSV export saved without a file extension). Its 95 trades break down as 36 winners and 59 losers, $40,335 gross profit against $44,935 gross loss.
 
 ## How to Use
 
 1. Open [TradingView](https://www.tradingview.com).
 2. Open the Pine Script editor.
-3. Copy `FYP_BOT_1.pine` into the editor.
+3. Copy `FYP_Bot_1.pine` into the editor.
 4. Add the script to a chart.
 5. Review results in the Strategy Tester tab.
 
