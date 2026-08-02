@@ -4,6 +4,8 @@ Algorithmic trading strategy research project for Maynooth University FYP 2026.
 
 This repository documents a Pine Script strategy built in TradingView for the NASDAQ-100 E-mini futures contract (NQ1!) during the New York morning session. The strategy combines Inverse Fair Value Gaps (IFVG) and Change in State of Delivery (CISD) as a double-confirmation entry model.
 
+> This is the original, frozen version of this research. The successor project, a more rigorous six-phase pre-registered study that disproves the edge found here, is at [fyp-strategy-engine](https://github.com/aleks-drozy/fyp-strategy-engine).
+
 > This project is for research and education only. It is not financial advice and should not be used as a live trading recommendation.
 
 ## Backtest Results
